@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Teste</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js"></script>
+</head>
+<body style="background:#0b1120;color:#fff;font-family:sans-serif;padding:20px;">
+<h1>Teste de Ligação</h1>
+<div id="out">A iniciar...</div>
+<script>
+var out = document.getElementById('out');
+function log(msg){ out.innerHTML += '<br>' + msg; }
+window.onerror = function(msg, src, line){ log('ERRO JS: ' + msg + ' (linha ' + line + ')'); };
+log('1. JavaScript esta a correr');
+try {
+  var SUPABASE_URL='https://tjsknigcpqgvftwhxhyl.supabase.co';
+  var SUPABASE_KEY='sb_publishable_PJZiDb83SgiUx3IOoE5tPw_Gz7MILL3';
+  if (!window.supabase) { log('ERRO: Biblioteca Supabase NAO carregou'); }
+  else {
+    log('2. Biblioteca Supabase carregada');
+    var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    sb.from('leagues').select('*').then(function(res){
+      if (res.error) { log('ERRO na query: ' + res.error.message); }
+      else { log('SUCESSO! Ligas encontradas: ' + res.data.length); }
+    }).catch(function(e){ log('Falha: ' + e.message); });
+  }
+} catch(e){ log('Excecao: ' + e.message); }
+</script>
+</body>
+</html>
