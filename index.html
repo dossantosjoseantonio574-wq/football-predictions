@@ -96,6 +96,10 @@ header h1 span{color:var(--primary);}
 </style>
 </head>
 <body>
+  <div id="errbox" style="position:fixed;top:0;left:0;right:0;background:#7f1d1d;color:#fff;font-size:12px;padding:8px;z-index:9999;font-family:monospace;white-space:pre-wrap;"></div>
+<script>
+window.onerror=function(m,s,l){var e=document.getElementById('errbox');e.textContent+='ERRO: '+m+' (linha '+l+')\n';};
+</script>
 <header>
 <h1>⚽ <span>FP</span>redictions</h1>
 <div style="display:flex;gap:8px;align-items:center;">
