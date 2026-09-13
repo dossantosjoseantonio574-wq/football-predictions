@@ -301,6 +301,7 @@ const fromDate='2025-09-14';
 const toDate='2025-09-21';
 const data=await apiFootball('/fixtures',{league:leagueId,from:fromDate,to:toDate});
 
+  log('DEBUG API: '+JSON.stringify({results:data.results,errors:data.errors}).slice(0,300),'warning');
 if(!data.response||data.response.length===0){
 showToast(`Nenhum jogo encontrado para ${league.name} nos próximos 7 dias`,'warning');
 log(`Nenhum jogo ${league.name}`,'warning');
