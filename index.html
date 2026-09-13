@@ -297,8 +297,8 @@ const content=document.getElementById('content');
 content.innerHTML=`<div class="loading"><div class="loading-spinner"></div>A buscar jogos da ${league.name}...</div>`;
 
 try{
-const fromDate=getToday();
-const toDate=daysFromNow(7);
+const fromDate='2025-09-14';
+const toDate='2025-09-21';
 const data=await apiFootball('/fixtures',{league:leagueId,from:fromDate,to:toDate});
 
 if(!data.response||data.response.length===0){
