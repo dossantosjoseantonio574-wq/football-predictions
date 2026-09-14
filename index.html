@@ -140,6 +140,10 @@ A inicializar motor de previsão...
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"></polyline><polyline points="16 7 22 7 22 13"></polyline></svg>
 <span>Value</span>
 </button>
+  <button onclick="showTab('manual',this)">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="4"></circle><circle cx="12" cy="12" r="0.5" fill="currentColor"></circle></svg>
+<span>Manual</span>
+  </button>
 </nav>
 
 <!-- Sync Modal -->
@@ -539,6 +543,7 @@ function render(){
 const content=document.getElementById('content');
 if(currentTab==='jogos')renderJogos(content);
 else if(currentTab==='previsoes')renderPrevisoes(content);
+else if(currentTab==='manual')renderManual(content);
 else renderValue(content);
 }
 
@@ -709,7 +714,317 @@ html+='</div>';
 document.getElementById('content').innerHTML=html;
 }
 
-// ==================== INICIALIZAÇÃO ====================
+// ==================== PREVISÃO MANUAL ====================
+let manualTeams=[];
+let manualTeamsLoaded=false;
+let manualLeagueFilter='all';
+
+async function loadManualTeams(){
+if(manualTeamsLoaded)return;
+const {data:fx}=await supabase.from('fixtures').select('home_team_id,away_team_id,league_id');
+const map={};
+(fx||[]).forEach(f=>{map[f.home_team_id]=f.league_id;map[f.away_team_id]=f.league_id;});
+const ids=Object.keys(map);
+if(ids.length===0){manualTeamsLoaded=true;return;}
+const {data:teams}=await supabase.from('teams').select('id,name,logo').in('id',ids);
+manualTeams=(teams||[]).map(t=>({...t,league_id:map[t.id]})).sort((a,b)=>a.name.localeCompare(b.name));
+manualTeamsLoaded=true;
+if(currentTab==='manual')render();
+}
+
+function setManualLeague(lid){manualLeagueFilter=lid;render();}
+
+function renderManual(content){
+loadManualTeams();
+let chips='<div class="league-selector"><button class="league-chip '+(manualLeagueFilter==='all'?'active':'')+'" onclick="setManualLeague(\'all\')">Todas</button>';
+for(const l of LEAGUES){
+chips+='<button class="league-chip '+(String(manualLeagueFilter)===String(l.id)?'active':'')+'" onclick="setManualLeague(\''+l.id+'\')">'+l.emoji+' '+l.name+'</button>';
+}
+chips+='</div>';
+if(manualTeams.length===0){
+content.innerHTML='<div class="section-title">🎯 Previsão Manual</div><div class="empty"><div class="empty-icon">⚽</div><p>A carregar equipas... se continuar vazio, sincroniza primeiro uma liga no separador Jogos.</p></div>';
+return;
+}
+const pool=manualLeagueFilter==='all'?manualTeams:manualTeams.filter(t=>String(t.league_id)===String(manualLeagueFilter));
+const opts=pool.map(t=>'<option value="'+t.id+'">'+t.name+'</option>').join('');
+content.innerHTML='<div class="section-title">🎯 Previsão Manual</div>'
++'<p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Escolhe o confronto e o site busca o histórico e gera o palpite com mercados e combinações. '+manualTeams.length+' equipas disponíveis.</p>'
++chips
++'<div class="card"><div style="display:flex;flex-direction:column;gap:10px;">'
++'<div><label style="font-size:12px;color:var(--muted);">🏠 Equipa da casa</label>'
++'<select id="manualHome" style="width:100%;padding:12px;border-radius:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);font-size:14px;">'+opts+'</select></div>'
++'<div><label style="font-size:12px;color:var(--muted);">✈️ Equipa de fora</label>'
++'<select id="manualAway" style="width:100%;padding:12px;border-radius:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);font-size:14px;">'+opts+'</select></div>'
++'<div><label style="font-size:12px;color:var(--muted);">🚑 Quem falta em casa? (opcional, separa nomes por vírgula)</label>'
++'<input id="manualAbsHome" placeholder="Ex: Haaland, De Bruyne" style="width:100%;padding:12px;border-radius:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);font-size:14px;"></div>'
++'<div><label style="font-size:12px;color:var(--muted);">🚑 Quem falta fora? (opcional)</label>'
++'<input id="manualAbsAway" placeholder="Ex: Kane" style="width:100%;padding:12px;border-radius:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);font-size:14px;"></div>'
++'<label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;"><input type="checkbox" id="manualCorners" checked> 🚩 Incluir cantos (1ª vez gasta ~10 requests; depois fica em cache)</label>'
++'<button class="btn" style="width:100%;" id="manualBtn" onclick="analyzeManual()">🔮 Analisar Confronto</button>'
++'<div id="manualResult" style="margin-top:8px;"></div>'
++'</div></div>';
+}
+
+function countAbsences(str){if(!str)return 0;return str.split(',').map(s=>s.trim()).filter(Boolean).length;}
+function formWDL(rows){let w=0,dd=0,l=0;for(const r of rows||[]){if(r.result==='W')w++;else if(r.result==='D')dd++;else l++;}return w+'V-'+dd+'E-'+l+'D';}
+function mRow(label,prob){return '<div class="market-item"><div class="m-label">'+label+'</div><div class="m-val">'+(prob*100).toFixed(1)+'%</div><div style="font-size:11px;color:var(--muted);">Odd '+(1/Math.max(0.01,prob)).toFixed(2)+'</div></div>';}
+function poissonOver(lambda,line){let s=0;for(let k=0;k<=line;k++)s+=poissonProb(lambda,k);return 1-s;}
+
+async function fetchTeamLast10(teamId){
+const data=await apiFootball('/fixtures',{team:teamId,last:10});
+const rows=[];
+for(const f of (data.response||[])){
+const isHome=f.teams.home.id===teamId;
+const gf=isHome?f.goals.home:f.goals.away;
+const ga=isHome?f.goals.away:f.goals.home;
+if(gf===null||ga===null)continue;
+rows.push({date:f.fixture.date,result:gf>ga?'W':gf===ga?'D':'L',goals_for:gf,goals_against:ga,opponent:isHome?f.teams.away.name:f.teams.home.name});
+}
+return rows;
+}
+
+async function getTeamForm(teamId){
+const {data}=await supabase.from('team_form').select('matches').eq('team_id',teamId).eq('season',SEASON).maybeSingle();
+if(data&&data.matches&&data.matches.length>0){log('Forma do '+teamId+' veio do Supabase (0 requests)');return data.matches;}
+const rows=await fetchTeamLast10(teamId);
+try{
+await supabase.from('team_form').delete().eq('team_id',teamId).eq('season',SEASON);
+await supabase.from('team_form').insert({team_id:teamId,season:SEASON,matches:rows,updated_at:new Date().toISOString()});
+}catch(e){log('Aviso: não guardei forma no Supabase: '+e.message,'warning');}
+return rows;
+}
+
+async function fetchH2H(homeId,awayId){
+const data=await apiFootball('/fixtures/headtohead',{h2h:homeId+'-'+awayId,last:10});
+const rows=[];
+for(const f of (data.response||[])){
+if(f.goals.home===null||f.goals.away===null)continue;
+rows.push({date:f.fixture.date,home_team_id:f.teams.home.id,away_team_id:f.teams.away.id,home_goals:f.goals.home,away_goals:f.goals.away});
+}
+return rows;
+}
+
+async function computeFromFixtures(teamId){
+const {data:fx}=await supabase.from('fixtures').select('*').or('home_team_id.eq.'+teamId+',away_team_id.eq.'+teamId).order('date',{ascending:true});
+let elo=1500,gf=0,ga=0,n=0;
+for(const f of (fx||[])){
+const isHome=f.home_team_id===teamId;
+const myGoals=isHome?f.home_goals:f.away_goals;
+const opGoals=isHome?f.away_goals:f.home_goals;
+if(myGoals===null||opGoals===null)continue;
+gf+=myGoals;ga+=opGoals;n++;
+const actual=myGoals>opGoals?1:myGoals===opGoals?0.5:0;
+elo+=20*(actual-0.5);
+}
+return{avgFor:n?gf/n:1.5,avgAgainst:n?ga/n:1.3,matches:n,elo:Math.round(elo)};
+}
+
+async function getTeamCornerAvg(teamId){
+const {data:fx}=await supabase.from('fixtures').select('id,date').or('home_team_id.eq.'+teamId+',away_team_id.eq.'+teamId).order('date',{ascending:true});
+const last5=(fx||[]).slice(-5);
+let sum=0,n=0;
+for(const f of last5){
+const key='corners_'+f.id+'_'+teamId;
+let v=getCache(key);
+if(v===null){
+v=-1;
+try{
+const data=await apiFootball('/fixtures/statistics',{fixture:f.id});
+for(const s of (data.response||[])){
+if(s.team.id!==teamId)continue;
+const c=s.statistics.find(x=>x.type==='Corner Kicks');
+const num=parseInt(c&&c.value);
+if(!isNaN(num))v=num;
+}
+}catch(e){log('Cantos indisponíveis no jogo '+f.id+': '+e.message,'warning');}
+setCache(key,v,24*30);
+}
+if(v>=0){sum+=v;n++;}
+}
+return{avg:n?sum/n:5.2,games:n,of:last5.length};
+}
+
+async function analyzeManual(){
+const homeId=parseInt(document.getElementById('manualHome').value);
+const awayId=parseInt(document.getElementById('manualAway').value);
+const resBox=document.getElementById('manualResult');
+const btn=document.getElementById('manualBtn');
+if(!homeId||!awayId){resBox.innerHTML='<div class="error">Escolhe as duas equipas.</div>';return;}
+if(homeId===awayId){resBox.innerHTML='<div class="error">Escolhe duas equipas diferentes.</div>';return;}
+let wantCorners=document.getElementById('manualCorners')?document.getElementById('manualCorners').checked:false;
+btn.disabled=true;btn.textContent='⏳ A analisar...';
+resBox.innerHTML='<div class="loading"><div class="loading-spinner"></div>A buscar dados do confronto...</div>';
+try{
+const u0=getApiUsage().used;
+if(wantCorners&&u0>85){wantCorners=false;log('Poucos requests restantes: cantos desativados desta vez','warning');}
+const homeName=manualTeams.find(t=>t.id===homeId)?manualTeams.find(t=>t.id===homeId).name:'Casa';
+const awayName=manualTeams.find(t=>t.id===awayId)?manualTeams.find(t=>t.id===awayId).name:'Fora';
+log('Análise manual: '+homeName+' vs '+awayName);
+const homeFormRows=await getTeamForm(homeId);
+const awayFormRows=await getTeamForm(awayId);
+const cacheKey='h2h_'+homeId+'_'+awayId;
+let h2hRows=getCache(cacheKey);
+if(!h2hRows){h2hRows=await fetchH2H(homeId,awayId);setCache(cacheKey,h2hRows,168);}else{log('H2H veio da cache (0 requests)');}
+const hStats=await computeFromFixtures(homeId);
+const aStats=await computeFromFixtures(awayId);
+let cornerH=null,cornerA=null;
+if(wantCorners){
+cornerH=await getTeamCornerAvg(homeId);
+cornerA=await getTeamCornerAvg(awayId);
+log('Cantos/jogo: '+homeName+' '+(cornerH.avg?cornerH.avg.toFixed(1):'-')+' ('+cornerH.games+'/'+cornerH.of+') | '+awayName+' '+(cornerA.avg?cornerA.avg.toFixed(1):'-')+' ('+cornerA.games+'/'+cornerA.of+')');
+}
+const u1=getApiUsage().used;
+log('Pedidos usados nesta análise: '+(u1-u0),'success');
+renderManualResult(resBox,{homeId,awayId,homeName,awayName,homeFormRows,awayFormRows,h2hRows,hStats,aStats,cornerH,cornerA,wantCorners});
+}catch(e){
+log('Erro análise manual: '+e.message,'error');
+resBox.innerHTML='<div class="error">Erro: '+e.message+'</div>';
+}finally{btn.disabled=false;btn.textContent='🔮 Analisar Confronto';}
+}
+
+function renderManualResult(box,d){
+const hAvgFor=d.hStats.avgFor,hAvgAgainst=d.hStats.avgAgainst;
+const aAvgFor=d.aStats.avgFor,aAvgAgainst=d.aStats.avgAgainst;
+const hL=hAvgFor*0.6+aAvgAgainst*0.4;
+const aL=aAvgFor*0.6+hAvgAgainst*0.4;
+const MX=[];
+for(let h=0;h<=6;h++){MX[h]=[];for(let a=0;a<=6;a++){MX[h][a]=poissonProb(hL,h)*poissonProb(aL,a);}}
+function cell(fn){let s=0;for(let h=0;h<=6;h++){for(let a=0;a<=6;a++){if(fn(h,a))s+=MX[h][a];}}return s;}
+const pHome=cell((h,a)=>h>a),pDraw=cell((h,a)=>h===a),pAway=cell((h,a)=>h<a);
+const eloH=d.hStats.elo,eloA=d.aStats.elo;
+const eloProb=calcEloProb(eloH,eloA);
+const eloHome=eloProb,eloDraw=0.25,eloAway=1-eloProb-0.25;
+const hfs=calcFormScore(d.homeFormRows),afs=calcFormScore(d.awayFormRows);
+const fd=(hfs-afs)/100;
+const formHome=0.45+fd*0.15,formAway=0.30-fd*0.15,formDraw=1-formHome-formAway;
+let h2hH=0.4,h2hD=0.25,h2hA=0.35;
+if(d.h2hRows&&d.h2hRows.length>0){
+let hw=0,hd=0,ha=0;
+for(const m of d.h2hRows){
+const mh=m.home_team_id===d.homeId;
+const mg=mh?m.home_goals:m.away_goals;
+const og=mh?m.away_goals:m.home_goals;
+if(mg>og)hw++;else if(mg===og)hd++;else ha++;
+}
+const t=hw+hd+ha||1;h2hH=hw/t;h2hD=hd/t;h2hA=ha/t;
+}
+const wg={poisson:0.35,elo:0.25,form:0.20,xg:0.12,h2h:0.08};
+const xgH=hAvgFor/(hAvgFor+aAvgFor+0.5),xgA=aAvgFor/(hAvgFor+aAvgFor+0.5),xgD=1-xgH-xgA;
+let home=wg.poisson*pHome+wg.elo*eloHome+wg.form*formHome+wg.xg*xgH+wg.h2h*h2hH;
+let draw=wg.poisson*pDraw+wg.elo*eloDraw+wg.form*formDraw+wg.xg*xgD+wg.h2h*h2hD;
+let away=wg.poisson*pAway+wg.elo*eloAway+wg.form*formAway+wg.xg*xgA+wg.h2h*h2hA;
+const absH=countAbsences(document.getElementById('manualAbsHome').value);
+const absA=countAbsences(document.getElementById('manualAbsAway').value);
+const adjH=Math.min(0.12,absH*0.03),adjA=Math.min(0.12,absA*0.03);
+if(adjH>0||adjA>0){
+const nh=home*(1-adjH),na=away*(1-adjA);
+draw=draw+(home*adjH+away*adjA);home=nh;away=na;
+}
+const tot=home+draw+away;home/=tot;draw/=tot;away/=tot;
+const p1X=home+draw,pX2=draw+away,p12=home+away;
+const btts=cell((h,a)=>h>=1&&a>=1);
+const tgH05=1-poissonProb(hL,0),tgH15=poissonOver(hL,1),tgH25=poissonOver(hL,2);
+const tgA05=1-poissonProb(aL,0),tgA15=poissonOver(aL,1),tgA25=poissonOver(aL,2);
+const over15=poissonOver(hL+aL?hL+aL:0.1,1);
+const over25=cell((h,a)=>h+a>=3);
+const over35=poissonOver(hL+aL?hL+aL:0.1,3);
+let cH=d.wantCorners?(d.cornerH&&d.cornerH.avg?d.cornerH.avg:5.2):5.2;
+let cA=d.wantCorners?(d.cornerA&&d.cornerA.avg?d.cornerA.avg:5.2):5.2;
+const cL=cH+cA;
+const cOver85=poissonOver(cL,8),cOver95=poissonOver(cL,9),cOver105=poissonOver(cL,10);
+const p00=MX[0][0];
+const firstH=(hL/(hL+aL))*(1-p00),firstA=(aL/(hL+aL))*(1-p00);
+const maxProb=Math.max(home,draw,away);
+const agreement=1-Math.abs(home-away);
+const hasData=(d.homeFormRows.length>0||d.hStats.matches>0)?1:0.6;
+const confidence=Math.round(Math.min(100,maxProb*100*agreement*hasData+10));
+const fav=home===maxProb?d.homeName:away===maxProb?d.awayName:'Empate';
+
+let combos='';
+combos+=mRow(d.homeName+' vence & Over 2.5',cell((h,a)=>h>a&&h+a>=3));
+combos+=mRow(d.homeName+' vence & Under 2.5',cell((h,a)=>h>a&&h+a<3));
+combos+=mRow(d.awayName+' vence & Over 2.5',cell((h,a)=>h<a&&h+a>=3));
+combos+=mRow(d.awayName+' vence & Under 2.5',cell((h,a)=>h<a&&h+a<3));
+combos+=mRow('Dupla 1X & Over 2.5',cell((h,a)=>h>=a&&h+a>=3));
+combos+=mRow('Dupla 1X & Under 2.5',cell((h,a)=>h>=a&&h+a<3));
+combos+=mRow('Dupla X2 & Over 2.5',cell((h,a)=>h<=a&&h+a>=3));
+combos+=mRow('Dupla X2 & Under 2.5',cell((h,a)=>h<=a&&h+a<3));
+combos+=mRow('1X & Ambas marcam',cell((h,a)=>h>=a&&h>=1&&a>=1));
+combos+=mRow('1X & Não ambas',cell((h,a)=>h>=a&&(h===0||a===0)));
+combos+=mRow('X2 & Ambas marcam',cell((h,a)=>h<=a&&h>=1&&a>=1));
+combos+=mRow('X2 & Não ambas',cell((h,a)=>h<=a&&(h===0||a===0)));
+combos+=mRow(d.homeName+' vence & '+d.awayName+' marca',cell((h,a)=>h>a&&a>=1));
+combos+=mRow(d.homeName+' vence & '+d.awayName+' não marca',cell((h,a)=>h>a&&a===0));
+combos+=mRow(d.awayName+' vence & '+d.homeName+' marca',cell((h,a)=>h<a&&h>=1));
+combos+=mRow(d.awayName+' vence & '+d.homeName+' não marca',cell((h,a)=>h<a&&h===0));
+if(d.wantCorners){
+combos+=mRow('Cantos Over 9.5 & Dupla 1X',cOver95*p1X);
+combos+=mRow('Cantos Over 9.5 & Dupla X2',cOver95*pX2);
+combos+=mRow('Cantos Over 9.5 & '+d.homeName+' marca',cOver95*tgH05);
+combos+=mRow('Cantos Over 9.5 & '+d.awayName+' marca',cOver95*tgA05);
+combos+=mRow('Cantos Over 9.5 & '+d.homeName+' marca 1º',cOver95*firstH);
+combos+=mRow('Cantos Over 9.5 & '+d.awayName+' marca 1º',cOver95*firstA);
+}
+
+box.innerHTML='<div class="card" style="border:1px solid var(--primary);">'
++'<div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px;font-size:12px;color:#fbbf24;margin-bottom:12px;">'
++'⚠️ Baseado em dados de 2024/25 (limite do plano gratuito). Combos com cantos assumem independência. Previsões indicativas, não garantias.'
++'</div>'
++'<h2 style="text-align:center;font-size:17px;margin-bottom:14px;">'+d.homeName+' vs '+d.awayName+'</h2>'
++'<div class="probs">'
++'<div class="prob '+(home===maxProb?'active':'')+'">1<span class="prob-val">'+(home*100).toFixed(1)+'%</span></div>'
++'<div class="prob '+(draw===maxProb?'active':'')+'">X<span class="prob-val">'+(draw*100).toFixed(1)+'%</span></div>'
++'<div class="prob '+(away===maxProb?'active':'')+'">2<span class="prob-val">'+(away*100).toFixed(1)+'%</span></div>'
++'</div>'
++'<div class="stats-row">'
++'<div class="stat"><div class="stat-val">'+fav+'</div><div class="stat-label">Favorito</div></div>'
++'<div class="stat"><div class="stat-val">'+(1/maxProb).toFixed(2)+'</div><div class="stat-label">Odd Justa</div></div>'
++'<div class="stat"><div class="stat-val">'+confidence+'%</div><div class="stat-label">Confiança</div></div>'
++'</div>'
++'<div class="model-details">'
++'<div class="md-row"><span>Golos esperados (λ)</span><span>'+hL.toFixed(2)+' vs '+aL.toFixed(2)+'</span></div>'
++'<div class="md-row"><span>Elo (calculado)</span><span>'+eloH+' vs '+eloA+'</span></div>'
++'<div class="md-row"><span>Forma recente</span><span>'+formWDL(d.homeFormRows)+' vs '+formWDL(d.awayFormRows)+'</span></div>'
++'<div class="md-row"><span>Confrontos diretos</span><span>'+d.h2hRows.length+' jogos</span></div>'
++'<div class="md-row"><span>1ª a marcar</span><span>'+d.homeName+' '+(firstH*100).toFixed(0)+'% | '+d.awayName+' '+(firstA*100).toFixed(0)+'%</span></div>'
++(absH>0?'<div class="md-row"><span>⚠️ Ausências em casa</span><span>'+absH+' jogador(es) -'+(adjH*100).toFixed(0)+'%</span></div>':'')
++(absA>0?'<div class="md-row"><span>⚠️ Ausências fora</span><span>'+absA+' jogador(es) -'+(adjA*100).toFixed(0)+'%</span></div>':'')
++'</div>'
++'</div>'
+
++'<div class="card"><h4 style="font-size:13px;color:var(--muted);margin-bottom:10px;text-transform:uppercase;">⚽ Golos — Jogo completo</h4><div class="market-grid">'
++mRow('Over 1.5',over15)+mRow('Under 1.5',1-over15)
++mRow('Over 2.5',over25)+mRow('Under 2.5',1-over25)
++mRow('Over 3.5',over35)+mRow('Under 3.5',1-over35)
++mRow('Ambas marcam — Sim',btts)+mRow('Ambas marcam — Não',1-btts)
++'</div></div>'
+
++'<div class="card"><h4 style="font-size:13px;color:var(--muted);margin-bottom:10px;text-transform:uppercase;">⚽ Golos — Equipas (Over/Under)</h4><div class="market-grid">'
++mRow(d.homeName+' Over 0.5',tgH05)+mRow(d.homeName+' Under 0.5',1-tgH05)
++mRow(d.homeName+' Over 1.5',tgH15)+mRow(d.homeName+' Under 1.5',1-tgH15)
++mRow(d.homeName+' Over 2.5',tgH25)+mRow(d.homeName+' Under 2.5',1-tgH25)
++mRow(d.awayName+' Over 0.5',tgA05)+mRow(d.awayName+' Under 0.5',1-tgA05)
++mRow(d.awayName+' Over 1.5',tgA15)+mRow(d.awayName+' Under 1.5',1-tgA15)
++mRow(d.awayName+' Over 2.5',tgA25)+mRow(d.awayName+' Under 2.5',1-tgA25)
++'</div></div>'
+
++'<div class="card"><h4 style="font-size:13px;color:var(--muted);margin-bottom:10px;text-transform:uppercase;">🚩 Cantos</h4>'
++'<div class="model-details" style="margin-top:0;margin-bottom:10px;">'
++'<div class="md-row"><span>Média cantos '+d.homeName+'</span><span>'+cH.toFixed(1)+' /jogo'+(d.wantCorners&&d.cornerH?' ('+d.cornerH.games+'/'+d.cornerH.of+' jogos)':' (média liga)')+'</span></div>'
++'<div class="md-row"><span>Média cantos '+d.awayName+'</span><span>'+cA.toFixed(1)+' /jogo'+(d.wantCorners&&d.cornerA?' ('+d.cornerA.games+'/'+d.cornerA.of+' jogos)':' (média liga)')+'</span></div>'
++'<div class="md-row"><span>Total estimado no jogo</span><span>'+cL.toFixed(1)+' cantos</span></div>'
++'</div><div class="market-grid">'
++mRow('Cantos Over 8.5',cOver85)+mRow('Cantos Under 8.5',1-cOver85)
++mRow('Cantos Over 9.5',cOver95)+mRow('Cantos Under 9.5',1-cOver95)
++mRow('Cantos Over 10.5',cOver105)+mRow('Cantos Under 10.5',1-cOver105)
++'</div></div>'
+
++'<div class="card"><h4 style="font-size:13px;color:var(--muted);margin-bottom:10px;text-transform:uppercase;">🎲 Combinações</h4><div class="market-grid">'
++combos
++'</div></div>'
+
++'<div class="explanation">Modelo ensemble: Poisson(35%) + Elo(25%) + Forma(20%) + xG(12%) + H2H(8%). Combos golos×golos são exatos (matriz de resultados); combos com cantos assumem independência entre cantos e golos.</div>';
+  }// ==================== INICIALIZAÇÃO ====================
 async function init(){
 updateApiCounter();
 await loadFixtures();
