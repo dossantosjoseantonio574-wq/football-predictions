@@ -301,8 +301,8 @@ const content=document.getElementById('content');
 content.innerHTML=`<div class="loading"><div class="loading-spinner"></div>A buscar jogos da ${league.name}...</div>`;
 
 try{
-const fromDate='2024-09-14';
-const toDate='2024-09-21';
+const fromDate='2024-09-25';
+const toDate='2024-10-02';
 const data=await apiFootball('/fixtures',{league:leagueId,from:fromDate,to:toDate});
 
   log('DEBUG API: '+JSON.stringify({results:data.results,errors:data.errors}).slice(0,300),'warning');
